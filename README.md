@@ -61,3 +61,5 @@ Permission is hereby granted, free of charge, to any person obtaining a copy...
 - 字体大小调节（a/s）
 - 位置记忆（开发中）
 - SQLite 缓存系统
+---
+[![Stargazers over time](https://starchart.cc/zhangjiakouzf/Conky-Lyrics-Pro.svg)](https://starchart.cc/zhangjiakouzf/Conky-Lyrics-Pro)
