@@ -4,7 +4,7 @@ a Lyrics Prompter with conky and playerctl
 **专业级桌面歌词显示器**  
 实时同步高亮 · 歌词缓存 · 多版本切换 · 字体调节 · 拖动定位 · 位置记忆
 
-https://github.com/yourname/Conky-Lyrics-Pro/assets/demo.gif
+https://github.com/zhangjiakouzf/Conky-Lyrics-Pro/assets/conky-lyrics-pro_demo.gif
 
 ---
 
@@ -24,7 +24,7 @@ https://github.com/yourname/Conky-Lyrics-Pro/assets/demo.gif
 
 ## 📸 效果展示
 
-![demo](assets/demo1.gif)
+![demo](assets/conky-lyrics-pro_demo.gif)
 
 ---
 
@@ -37,7 +37,7 @@ sudo dnf install conky playerctl curl jq sqlite3 coreutils gawk
 ```
 ### 安装(不用安装，直接运行)
 ```bash
-git clone https://github.com/yourname/Conky-Lyrics-Pro.git
+git clone https://github.com/zhangjiakouzf/Conky-Lyrics-Pro.git
 cd Conky-Lyrics-Pro
 chmod +x conky-lyrics-pro.sh
 ./conky-lyrics-pro.sh
@@ -54,3 +54,10 @@ MIT License
 Copyright (c) 2025 miles
 
 Permission is hereby granted, free of charge, to any person obtaining a copy...
+
+## 版本
+### [1.1-20251110] - 2025-11-10
+- 多版本歌词切换（-/+）
+- 字体大小调节（a/s）
+- 位置记忆（开发中）
+- SQLite 缓存系统
