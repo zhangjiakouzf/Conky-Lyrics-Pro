@@ -327,15 +327,25 @@ SQL
         } || { warn "create table in DB:$APP_DB_FILE failed "; } 
 };initialize_db
 
+escape_string(){
+        local string="$1"
+        local string=${string//$'\n'/\\n}
+        string=${string//\"/\*}
+        string=${string//\'/\*}
+        echo -n "$string"
+}
 # 返回 0=缓存命中, 1=未命中
 get_lyrics_from_db() {
         local db_file="${APP_DB_FILE:?APP_DB_FILE must be set}"
+        local music_track=$(escape_string "$MUSIC_TRACK")
+        local music_artist=$(escape_string "$MUSIC_ARTIST")
+        local music_album=$(escape_string "$MUSIC_ALBUM")
         local lyrics=$(sqlite3 "$APP_DB_FILE" << SQL
 .param init
 .param clear
-.param set :track  '$MUSIC_TRACK'
-.param set :artist '$MUSIC_ARTIST'
-.param set :album  '$MUSIC_ALBUM'
+.param set :track  '$music_track'
+.param set :artist '$music_artist'
+.param set :album  '$music_album'
 SELECT lyrics FROM lyrics
 WHERE track=:track AND artist=:artist AND album=:album
 ORDER BY fetched_at DESC LIMIT 1;
@@ -348,14 +358,15 @@ SQL
 save_lyrics_to_db() {
         local db_file="${APP_DB_FILE:?APP_DB_FILE must be set}"
         (( ${#LYRICS_DISPLAY_CONTENT} < 10 )) && return 1
-        local lyrics_escaped=${LYRICS_DISPLAY_CONTENT//$'\n'/\\n}
-        lyrics_escaped=${lyrics_escaped//\"/\*}
-        lyrics_escaped=${lyrics_escaped//\'/\*}
+        local music_track=$(escape_string "$MUSIC_TRACK")
+        local music_artist=$(escape_string "$MUSIC_ARTIST")
+        local music_album=$(escape_string "$MUSIC_ALBUM")
+        local lyrics_escaped=$(escape_string "$LYRICS_DISPLAY_CONTENT")
         {
         sqlite3 "$db_file" << SQL
-.param set :track  '$MUSIC_TRACK'
-.param set :artist '$MUSIC_ARTIST'
-.param set :album  '$MUSIC_ALBUM'
+.param set :track  '$music_track'
+.param set :artist '$music_artist'
+.param set :album  '$music_album'
 .param set :lyrics "$lyrics_escaped"
 INSERT OR REPLACE INTO lyrics
 (track, artist, album, lyrics, fetched_at)
@@ -401,7 +412,7 @@ get_music_meta(){
         MUSIC_TRACK=$(ctrl_client metadata -f "{{title}}")   || { warn "ctrl_client meta -f {{title}} failed ";return 1; }
         MUSIC_ALBUM=$(ctrl_client metadata -f "{{album}}")   || { warn "ctrl_client meta -f {{album}} failed ";return 1; }
         MUSIC_ARTIST=$(ctrl_client metadata -f "{{artist}}") || { warn "ctrl_client meta -f {{artist}} failed ";return 1; }
-        MUSIC_LENGTH=$(ctrl_client metadata -f "{{duration(mpris:length)}}") || { warn "ctrl_client meta -f {{artist}} failed ";return 1; }
+        MUSIC_LENGTH=$(awk -v len="$(ctrl_client metadata -f "{{mpris:length}}")" 'BEGIN {printf "%.2f", len/1000000}') || { warn "ctrl_client meta -f {{artist}} failed ";return 1; }
         return 0
 } 
 
@@ -421,33 +432,32 @@ fetch_lyrics(){
         fi
         
         info "[网络获取] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST"
-        local lyric_url=`urlbuild "https://lrclib.net/api/search" "q=$MUSIC_TRACK" "track_name=$MUSIC_TRACK" "album_name=$MUSIC_ALBUM" "artist_name=$MUSIC_ARTIST"`
+        local lyric_url=$(urlbuild "https://lrclib.net/api/search" "q=$MUSIC_TRACK" "track_name=$MUSIC_TRACK" "album_name=$MUSIC_ALBUM" "artist_name=$MUSIC_ARTIST")
         DEBUG=1 debug "$lyric_url"
         local curl_timeout="${APP_CURL_TIMEOUT:-20}"
         local lyric_fetch_cmd="curl -s --max-time $curl_timeout -L $lyric_url" 
-        LYRICS_JS_RESPONSE=`eval $lyric_fetch_cmd` || { warn "Fetch lyrics with \"$lyric_fetch_cmd\" failed"; return 1; }
+        LYRICS_JS_RESPONSE=$(eval $lyric_fetch_cmd) || { warn "Fetch lyrics with \"$lyric_fetch_cmd\" failed"; return 1; }
         parse_lyrics
         return $?
 }
 
 parse_lyrics(){
-        local -a lyrics_array_syncedlyrics=()
         local lyrics_revised_content=""
         [[ -n $LYRICS_JS_RESPONSE ]] && {
                 local IFS=$'\n'; 
-                LYRICS_ARRAY_SYNCEDLYRICS=(`jq '.[] | select(.syncedLyrics != null and .syncedLyrics !="" ).syncedLyrics' <<< "$LYRICS_JS_RESPONSE"`) || { warn "Parse lyrics failed"; return 1; }
+                LYRICS_ARRAY_SYNCEDLYRICS=($(jq ' [ .[] | select(.syncedLyrics != null and .syncedLyrics !="" and (.syncedLyrics | test("^\\s*$") | not)) | {l: .syncedLyrics, d: ((.duration - '"$MUSIC_LENGTH"') | fabs)} ] | sort_by(.d) | .[].l ' <<< "$LYRICS_JS_RESPONSE")) || { warn "Parse lyrics failed"; return 1; }
                 }
         LYRICS_ARRAY_COUNT=${#LYRICS_ARRAY_SYNCEDLYRICS[@]}
         if (( $LYRICS_ARRAY_COUNT > 0 )); then 
                 #https://www.gnu.org/software/freefont/ranges/symbols.html
                 #ⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ
                 #ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ
-                lyrics_revised_content=`echo -e "[00:00.0] ⓒⓞⓝⓚⓨ ⓛⓨⓡⓘⓒⓢ ⓟⓡⓞ\\n${LYRICS_ARRAY_SYNCEDLYRICS[$LYRICS_ARRAY_INDEX]}"`
+                lyrics_revised_content=$(echo -e "[00:00.0] ⓒⓞⓝⓚⓨ ⓛⓨⓡⓘⓒⓢ ⓟⓡⓞ\\n${LYRICS_ARRAY_SYNCEDLYRICS[$LYRICS_ARRAY_INDEX]}")
         else
-                lyrics_revised_content=`echo -e "${LYRICS_ARRAY_SYNCEDLYRICS[$LYRICS_ARRAY_INDEX]}"`
+                lyrics_revised_content=$(echo -e "${LYRICS_ARRAY_SYNCEDLYRICS[$LYRICS_ARRAY_INDEX]}")
         fi
         #英文歌曲不能把空格去掉
-        LYRICS_DISPLAY_CONTENT=`awk -F'[:.\\\\[\\\\]]' 'NF>=2{lyrics_timestemp=($2*60+$3)"."$4;print lyrics_timestemp,$5}'<<<"$lyrics_revised_content"`
+        LYRICS_DISPLAY_CONTENT=$(awk -F'[:.\\[\\]]' 'NF>=2{lyrics_timestemp=($2*60+$3)"."$4;print lyrics_timestemp,$5}'<<<"$lyrics_revised_content")
         save_lyrics_to_db
         print_music_meta
         return 0
@@ -528,6 +538,7 @@ main(){
                 curr_skip_lines=0
                 reset_marquee
                 get_music_meta || { warn "get_music_meta failed "; sleep 3; continue; } 
+                write_pipe "<<  $MUSIC_TRACK  >>\n\${color0}歌词载入中..."
                 fetch_lyrics || { warn "fetch_lyrics failed "; } 
                 while true
                 do
@@ -538,7 +549,7 @@ main(){
                                 2) print_music_meta ;;
                         esac
 
-                        read -r curr_music_pos curr_music_track <<<`ctrl_client metadata -f "{{position}} {{title}}"` || { warn "ctrl_client metadata -f \"{{position}} {{title}}\" "; sleep 1; continue; }
+                        read -r curr_music_pos curr_music_track <<<$(ctrl_client metadata -f "{{position}} {{title}}") || { warn "ctrl_client metadata -f \"{{position}} {{title}}\" "; sleep 1; continue; }
                         curr_music_artist=$(ctrl_client metadata -f "{{artist}}") || { warn "ctrl_client meta -f {{artist}} failed ";return 1; }
                         curr_music_pos=$(awk -v pos="$curr_music_pos" 'BEGIN {printf "%.2f", pos/1000000}')
 
@@ -551,7 +562,7 @@ main(){
                         redraw "position:$curr_music_pos skip_lines:$lyrics_skip_lines curr_skip_lines:$curr_skip_lines index:$LYRICS_ARRAY_INDEX count:$LYRICS_ARRAY_COUNT conky_pid:$CONKY_PID conky fontsize:$CONKY_FONT_SIZE"
                         if [[ -n $LYRICS_DISPLAY_CONTENT ]]
                         then
-                                local lyrics_show=`awk -v title="$MUSIC_TRACK" -v position=$curr_music_pos -v skip=$lyrics_skip_lines 'NR>skip {
+                                local lyrics_show=$(awk -v title="$MUSIC_TRACK" -v position=$curr_music_pos -v skip=$lyrics_skip_lines 'NR>skip {
                                                 pos=position
                                                 if($1>=pos+1){
                                                         if( length(last) >0 ){
@@ -585,13 +596,13 @@ main(){
                                                         $1=""
                                                         last=$0
                                                 }
-                                        }' <<< "$LYRICS_DISPLAY_CONTENT"` 
+                                        }' <<< "$LYRICS_DISPLAY_CONTENT") 
                                 if [[ -n $lyrics_show ]]
                                 then
                                         #如果有歌词需要显示
-                                        write_pipe "`head -n 3 <<< "$lyrics_show"`"
+                                        write_pipe "$(head -n 3 <<< "$lyrics_show")"
                                         #跳过歌词主要是为了考虑节省性能，因为已经显示过的歌词没有用了。但不能删，因为有可能会调整播放进度（拖动进度条）
-                                        curr_skip_lines=`tail -n 1 <<<"$lyrics_show"`
+                                        curr_skip_lines=$(tail -n 1 <<<"$lyrics_show")
                                         (( curr_skip_lines >= 1 )) && { lyrics_skip_lines=$((lyrics_skip_lines+curr_skip_lines-1)); }
                                         reset_marquee
                                 else
