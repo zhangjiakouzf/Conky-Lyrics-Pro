@@ -1,11 +1,10 @@
 # Conky Lyrics Pro 🎤✨
 a Lyrics Prompter with conky and playerctl
 
-**专业级桌面歌词显示器**  
+**桌面歌词题词器**  
 实时同步高亮 · 歌词缓存 · 多版本切换 · 字体调节 · 拖动定位 · 位置记忆
 
-https://github.com/zhangjiakouzf/Conky-Lyrics-Pro/assets/conky-lyrics-pro_demo.gif
-
+https://github.com/zhangjiakouzf/Conky-Lyrics-Pro/blob/main/assets/conky-lyrics-pro_demo.gif
 ---
 
 ## ✨ 特性一览
