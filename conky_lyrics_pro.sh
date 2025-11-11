@@ -413,6 +413,22 @@ VALUES (:track, :artist, :album, :lyrics, strftime('%s','now'),:offset);
 SQL
         } || { warn "insert lyrics with $MUSIC_TRACK,$MUSIC_ARTIST,$MUSIC_ALBUM in DB:$APP_DB_FILE failed "; }
 }
+
+delete_lyrics_from_db(){
+        local db_file="${APP_DB_FILE:?APP_DB_FILE must be set}"
+        local music_track=$(escape_string "$MUSIC_TRACK")
+        local music_artist=$(escape_string "$MUSIC_ARTIST")
+        local music_album=$(escape_string "$MUSIC_ALBUM")
+        #warn "DELETE FROM LYRICS WHERE ( track=$music_track and artist=$music_artist and album=$music_album );"
+        {
+        sqlite3 "$db_file" << SQL
+.param set :track  '$music_track'
+.param set :artist '$music_artist'
+.param set :album  '$music_album'
+DELETE FROM LYRICS WHERE ( track=:track and artist=:artist and album=:album );
+SQL
+        } || { warn "delete $MUSIC_TRACK,$MUSIC_ARTIST,$MUSIC_ALBUM in DB:$APP_DB_FILE failed "; }
+}
 # }}}
 
 # Generate URL for fetching lyrics
@@ -456,6 +472,7 @@ get_music_meta(){
 } 
 
 cleanup_search_lyrics(){
+        LYRICS_ARRAY_SYNCEDLYRICS=()
         LYRICS_DB_CONTENT=""
         LYRICS_JS_SEARCH_RESPONSE=""
         LYRICS_SEARCH_ARRAY_COUNT=0
@@ -616,6 +633,7 @@ handle_keys() {
                         a) adjust_fontsize_conky 10; ret=2;;
                         s) adjust_fontsize_conky -10;ret=2;;
                         S) save_lyrics_to_db;;
+                        D) delete_lyrics_from_db;;
                         n) PLAY_NEW_MUSIC=1;;
                         d) dump_lyrics;;
                         u) upload_lyrics;;
