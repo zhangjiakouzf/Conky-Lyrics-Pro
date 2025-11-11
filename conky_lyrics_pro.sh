@@ -464,6 +464,7 @@ cleanup_search_lyrics(){
 }
 
 search_lyrics(){
+        local save_to_db=${1:-1}
         write_pipe "<<  $MUSIC_TRACK  >>\n\${color0}歌词搜索中..."
         echo
         info "[网络搜索] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST"
@@ -477,8 +478,9 @@ search_lyrics(){
                 LYRICS_SEARCH_ARRAY_COUNT="${#LYRICS_SEARCH_ARRAY_SYNCEDLYRICS[@]}"
                 LYRICS_ARRAY_SYNCEDLYRICS+=("${LYRICS_SEARCH_ARRAY_SYNCEDLYRICS[@]}")
                 LYRICS_ARRAY_INDEX=0
-                parse_lyrics
+                parse_lyrics "$save_to_db"
         }
+        return $?
 }
 
 cleanup_last_lyrics(){
@@ -492,6 +494,7 @@ fetch_lyrics(){
         write_pipe "<<  $MUSIC_TRACK  >>\n\${color0}歌词载入中..."
         cleanup_last_lyrics
         local save_to_db=1
+        local success=0
         get_lyrics_from_db
         if [[ $? == 0 ]]
         then
@@ -499,19 +502,29 @@ fetch_lyrics(){
                 info "[缓存命中] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST";
                 LYRICS_ARRAY_SYNCEDLYRICS=("$LYRICS_DB_CONTENT")
                 save_to_db=0
+                success=1
         else
                 echo
                 info "[网络获取] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST"
                 local lyric_url=$(urlbuild "https://lrclib.net/api/get" "track_name=$MUSIC_TRACK" "album_name=$MUSIC_ALBUM" "artist_name=$MUSIC_ARTIST" duration="${MUSIC_LENGTH%%.*}")
                 DEBUG=1 debug "$lyric_url"
                 local lyric_fetch_cmd="$APP_CURL_COMMAND '$lyric_url'" 
-                LYRICS_JS_RESPONSE=$(eval $lyric_fetch_cmd) || { warn "Fetch lyrics with \"$lyric_fetch_cmd\" failed"; return 1; }
+                LYRICS_JS_RESPONSE=$(eval $lyric_fetch_cmd) || { warn "Fetch lyrics with \"$lyric_fetch_cmd\" failed"; LYRICS_JS_RESPONSE=""; }
                 [[ -n $LYRICS_JS_RESPONSE ]] && {
                         local IFS=$'\n';
                         LYRICS_ARRAY_SYNCEDLYRICS=($(jq '.|select(.syncedLyrics != null and .syncedLyrics !="" and (.syncedLyrics | test("^\\s*$") | not)).syncedLyrics' <<< "$LYRICS_JS_RESPONSE")) || { warn "Parse lyrics failed"; return 1; }
+                        LYRICS_ARRAY_COUNT="${#LYRICS_ARRAY_SYNCEDLYRICS[@]}"
+                        (( $LYRICS_ARRAY_COUNT >0 )) && success=1
                 }
+
         fi
-        parse_lyrics "$save_to_db"
+
+        if (( $success ==1 ))
+        then
+                parse_lyrics "$save_to_db"
+        else
+                search_lyrics "$save_to_db"
+        fi
         return $?
 }
 
@@ -555,7 +568,7 @@ navigate_lyrics(){
         #如果搜索歌词数组为0，就去search一下
         if (( LYRICS_SEARCH_ARRAY_COUNT == 0 ))
         then
-                search_lyrics
+                search_lyrics 0
         #有歌词并且大于一组，才去切换。
         elif (( LYRICS_ARRAY_COUNT > 1 ))
         then
