@@ -15,17 +15,36 @@ APP_PIPE_FILE="$APP_RUNTIME_DIR/$APP_NAME.pipe"
 APP_DB_FILE="$APP_RUNTIME_DIR/$APP_NAME.db"
 APP_CUSTOMIZATION="$APP_RUNTIME_DIR/Customization"
 APP_CURL_TIMEOUT=20
-
+APP_CURL_COMMAND="curl -s -L --max-time $APP_CURL_TIMEOUT \
+  -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' \
+  -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' \
+  -H 'Accept-Language: zh-CN,zh;q=0.9,en;q=0.8' \
+  -H 'Accept-Encoding: gzip, deflate, br' \
+  -H 'Connection: keep-alive' \
+  -H 'Upgrade-Insecure-Requests: 1' \
+  -H 'Sec-Fetch-Dest: document' \
+  -H 'Sec-Fetch-Mode: navigate' \
+  -H 'Sec-Fetch-Site: none' \
+  -H 'Sec-Fetch-User: ?1' \
+  -H 'Cache-Control: max-age=0' \
+  --compressed \
+  "
 MUSIC_TRACK=""
 MUSIC_ARTIST=""
 MUSIC_ALBUM=""
 MUSIC_LENGTH=""
+PLAY_NEW_MUSIC=0
 
 LYRICS_JS_RESPONSE=""
 declare -a LYRICS_ARRAY_SYNCEDLYRICS
 LYRICS_ARRAY_INDEX=0
 LYRICS_ARRAY_COUNT=0
 LYRICS_DISPLAY_CONTENT=""
+LYRICS_DB_CONTENT=""
+
+LYRICS_JS_SEARCH_RESPONSE=""
+declare -a LYRICS_SEARCH_ARRAY_SYNCEDLYRICS
+LYRICS_SEARCH_ARRAY_COUNT=0
 
 CONKY_FONT_SIZE=20
 CONKY_RUNNING="no"
@@ -351,17 +370,18 @@ WHERE track=:track AND artist=:artist AND album=:album
 ORDER BY fetched_at DESC LIMIT 1;
 SQL
         ) || { warn "select lyrics with $MUSIC_TRACK,$MUSIC_ARTIST,$MUSIC_ALBUM in DB:$APP_DB_FILE failed "; }
-        [[ -n $lyrics ]] && { LYRICS_DISPLAY_CONTENT="$lyrics"; return 0; }
-        return 1
+        [[ -z $lyrics ]] && { return 1; }
+        LYRICS_DB_CONTENT="$lyrics"; 
+        return 0
 }
 
 save_lyrics_to_db() {
         local db_file="${APP_DB_FILE:?APP_DB_FILE must be set}"
-        (( ${#LYRICS_DISPLAY_CONTENT} < 10 )) && return 1
+        (( ${#LYRICS_DB_CONTENT} < 10 )) && return 1
         local music_track=$(escape_string "$MUSIC_TRACK")
         local music_artist=$(escape_string "$MUSIC_ARTIST")
         local music_album=$(escape_string "$MUSIC_ALBUM")
-        local lyrics_escaped=$(escape_string "$LYRICS_DISPLAY_CONTENT")
+        local lyrics_escaped=$(escape_string "$LYRICS_DB_CONTENT")
         {
         sqlite3 "$db_file" << SQL
 .param set :track  '$music_track'
@@ -416,62 +436,83 @@ get_music_meta(){
         return 0
 } 
 
-fetch_lyrics(){
-        LYRICS_ARRAY_INDEX=0
-        LYRICS_ARRAY_COUNT=0
-        local use_cache="${1:-1}"
-        if (( use_cache==1 ))
-        then
-                get_lyrics_from_db && { 
-                        info "[缓存命中] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST";
-                        LYRICS_JS_RESPONSE=""
-                        LYRICS_ARRAY_SYNCEDLYRICS=()
-                        print_music_meta;
-                        return 0;
-                }
-        fi
-        
-        info "[网络获取] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST"
+clearup_search_lyrics(){
+        LYRICS_JS_SEARCH_RESPONSE=""
+        LYRICS_SEARCH_ARRAY_COUNT=0
+        LYRICS_SEARCH_ARRAY_SYNCEDLYRICS=()
+}
+
+search_lyrics(){
+        write_pipe "<<  $MUSIC_TRACK  >>\n\${color0}歌词搜索中..."
+        info "[网络搜索] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST"
         local lyric_url=$(urlbuild "https://lrclib.net/api/search" "q=$MUSIC_TRACK" "track_name=$MUSIC_TRACK" "album_name=$MUSIC_ALBUM" "artist_name=$MUSIC_ARTIST")
         DEBUG=1 debug "$lyric_url"
-        local curl_timeout="${APP_CURL_TIMEOUT:-20}"
-        local lyric_fetch_cmd="curl -s --max-time $curl_timeout -L $lyric_url" 
-        LYRICS_JS_RESPONSE=$(eval $lyric_fetch_cmd) || { warn "Fetch lyrics with \"$lyric_fetch_cmd\" failed"; return 1; }
-        parse_lyrics
+        local lyric_search_cmd="$APP_CURL_COMMAND '$lyric_url'" 
+        LYRICS_JS_SEARCH_RESPONSE=$(eval $lyric_search_cmd) || { warn "Fetch lyrics with \"$lyric_search_cmd\" failed"; return 1; }
+        [[ -n $LYRICS_JS_SEARCH_RESPONSE ]] && {
+                local IFS=$'\n';
+                LYRICS_SEARCH_ARRAY_SYNCEDLYRICS=($(jq ' [ .[] | select(.syncedLyrics != null and .syncedLyrics !="" and (.syncedLyrics | test("^\\s*$") | not)) | {l: .syncedLyrics, d: ((.duration - '"$MUSIC_LENGTH"') | fabs)} ] | sort_by(.d) | .[].l ' <<< "$LYRICS_JS_SEARCH_RESPONSE")) || { warn "Parse lyrics failed"; return 1; }
+                LYRICS_SEARCH_ARRAY_COUNT="${#LYRICS_SEARCH_ARRAY_SYNCEDLYRICS[@]}"
+                LYRICS_ARRAY_SYNCEDLYRICS+=("${LYRICS_SEARCH_ARRAY_SYNCEDLYRICS[@]}")
+                LYRICS_ARRAY_INDEX=0
+                parse_lyrics
+        }
+}
+
+fetch_lyrics(){
+        write_pipe "<<  $MUSIC_TRACK  >>\n\${color0}歌词载入中..."
+        clearup_search_lyrics
+        LYRICS_ARRAY_INDEX=0
+        LYRICS_ARRAY_COUNT=0
+        LYRICS_DISPLAY_CONTENT=""
+        local save_to_db=1
+        get_lyrics_from_db
+        if [[ $? == 0 ]]
+        then
+                info "[缓存命中] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST";
+                LYRICS_ARRAY_SYNCEDLYRICS=("$LYRICS_DB_CONTENT")
+                save_to_db=0
+        else
+                info "[网络获取] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST"
+                local lyric_url=$(urlbuild "https://lrclib.net/api/get" "track_name=$MUSIC_TRACK" "album_name=$MUSIC_ALBUM" "artist_name=$MUSIC_ARTIST" duration="${MUSIC_LENGTH%%.*}")
+                DEBUG=1 debug "$lyric_url"
+                local lyric_fetch_cmd="$APP_CURL_COMMAND '$lyric_url'" 
+                LYRICS_JS_RESPONSE=$(eval $lyric_fetch_cmd) || { warn "Fetch lyrics with \"$lyric_fetch_cmd\" failed"; return 1; }
+                [[ -n $LYRICS_JS_RESPONSE ]] && {
+                        local IFS=$'\n';
+                        LYRICS_ARRAY_SYNCEDLYRICS=($(jq '.|select(.syncedLyrics != null and .syncedLyrics !="" and (.syncedLyrics | test("^\\s*$") | not)).syncedLyrics' <<< "$LYRICS_JS_RESPONSE")) || { warn "Parse lyrics failed"; return 1; }
+                }
+        fi
+        parse_lyrics "$save_to_db"
         return $?
 }
 
 parse_lyrics(){
-        local lyrics_revised_content=""
-        [[ -n $LYRICS_JS_RESPONSE ]] && {
-                local IFS=$'\n'; 
-                LYRICS_ARRAY_SYNCEDLYRICS=($(jq ' [ .[] | select(.syncedLyrics != null and .syncedLyrics !="" and (.syncedLyrics | test("^\\s*$") | not)) | {l: .syncedLyrics, d: ((.duration - '"$MUSIC_LENGTH"') | fabs)} ] | sort_by(.d) | .[].l ' <<< "$LYRICS_JS_RESPONSE")) || { warn "Parse lyrics failed"; return 1; }
-                }
-        LYRICS_ARRAY_COUNT=${#LYRICS_ARRAY_SYNCEDLYRICS[@]}
-        if (( $LYRICS_ARRAY_COUNT > 0 )); then 
+        LYRICS_JS_RESPONSE=""
+        local save_to_db=${1:-1}
+        LYRICS_ARRAY_COUNT="${#LYRICS_ARRAY_SYNCEDLYRICS[@]}"
+        (( $LYRICS_ARRAY_COUNT > 0 )) && { 
+                LYRICS_DB_CONTENT=$(echo -e "${LYRICS_ARRAY_SYNCEDLYRICS[$LYRICS_ARRAY_INDEX]}")
+                #英文歌曲不能把空格去掉
+                LYRICS_DISPLAY_CONTENT=$(awk -F'[:.\\[\\]]' 'NF>=2{lyrics_timestemp=($2*60+$3)"."$4;print lyrics_timestemp,$5}'<<<"$LYRICS_DB_CONTENT")
+
+                [[ $save_to_db == 1 ]] && save_lyrics_to_db
                 #https://www.gnu.org/software/freefont/ranges/symbols.html
                 #ⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ
                 #ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ
-                lyrics_revised_content=$(echo -e "[00:00.0] ⓒⓞⓝⓚⓨ ⓛⓨⓡⓘⓒⓢ ⓟⓡⓞ\\n${LYRICS_ARRAY_SYNCEDLYRICS[$LYRICS_ARRAY_INDEX]}")
-        else
-                lyrics_revised_content=$(echo -e "${LYRICS_ARRAY_SYNCEDLYRICS[$LYRICS_ARRAY_INDEX]}")
-        fi
-        #英文歌曲不能把空格去掉
-        LYRICS_DISPLAY_CONTENT=$(awk -F'[:.\\[\\]]' 'NF>=2{lyrics_timestemp=($2*60+$3)"."$4;print lyrics_timestemp,$5}'<<<"$lyrics_revised_content")
-        save_lyrics_to_db
+                [[ -n $LYRICS_DISPLAY_CONTENT ]] && LYRICS_DISPLAY_CONTENT="0.0 ⓒⓞⓝⓚⓨ ⓛⓨⓡⓘⓒⓢ ⓟⓡⓞ"$'\n'"$LYRICS_DISPLAY_CONTENT"
+        } 
         print_music_meta
         return 0
 }
 
 navigate_lyrics(){
         local direction="${1:-1}"
-        #如果歌词数组为0，没有歌词就去fetch一下
-        if (( LYRICS_ARRAY_COUNT == 0 ))
+        #如果搜索歌词数组为0，就去search一下
+        if (( LYRICS_SEARCH_ARRAY_COUNT == 0 ))
         then
-                #LYRICS_JS_RESPONSE 为空说明歌词是从db cache里来的,可以去fetch一下
-                #如果不为空，说明网络上就没有这首歌的歌词，就别去fetch了。
-                [[ -z $LYRICS_JS_RESPONSE ]] && fetch_lyrics 0
-        #有歌词并且大于一组，才去切换。只有一组歌词就别切换了，没意义
+                search_lyrics
+        #有歌词并且大于一组，才去切换。
         elif (( LYRICS_ARRAY_COUNT > 1 ))
         then
                 (( LYRICS_ARRAY_INDEX = (LYRICS_ARRAY_INDEX + direction + LYRICS_ARRAY_COUNT) % LYRICS_ARRAY_COUNT ));
@@ -517,6 +558,7 @@ handle_keys() {
                         =|+) navigate_lyrics 1;     ret=1;;
                         a) adjust_fontsize_conky 10; ret=2;;
                         s) adjust_fontsize_conky -10;ret=2;;
+                        n) PLAY_NEW_MUSIC=1;;
                         *) ;;
                 esac
         fi
@@ -536,9 +578,9 @@ main(){
                 last_music_pos=0
                 lyrics_skip_lines=0
                 curr_skip_lines=0
+                PLAY_NEW_MUSIC=0
                 reset_marquee
                 get_music_meta || { warn "get_music_meta failed "; sleep 3; continue; } 
-                write_pipe "<<  $MUSIC_TRACK  >>\n\${color0}歌词载入中..."
                 fetch_lyrics || { warn "fetch_lyrics failed "; } 
                 while true
                 do
@@ -554,12 +596,13 @@ main(){
                         curr_music_pos=$(awk -v pos="$curr_music_pos" 'BEGIN {printf "%.2f", pos/1000000}')
 
                         #处理自动或者手动切换歌曲
-                        [[ $curr_music_track != $MUSIC_TRACK || $curr_music_artist != $MUSIC_ARTIST ]] && { break; } 
+                        [[ $curr_music_track != $MUSIC_TRACK || $curr_music_artist != $MUSIC_ARTIST ]] && { PLAY_NEW_MUSIC=1; } 
+                        [[ $PLAY_NEW_MUSIC == 1 ]] && break;
                         #处理播放器调整播放进度
                         (( $(bc <<< "$curr_music_pos < $last_music_pos") ))  && { clear_pipe; lyrics_skip_lines=0; }
 
                         last_music_pos=$curr_music_pos
-                        redraw "position:$curr_music_pos skip_lines:$lyrics_skip_lines curr_skip_lines:$curr_skip_lines index:$LYRICS_ARRAY_INDEX count:$LYRICS_ARRAY_COUNT conky_pid:$CONKY_PID conky fontsize:$CONKY_FONT_SIZE"
+                        redraw "position:$curr_music_pos skip_lines:$lyrics_skip_lines curr_skip_lines:$curr_skip_lines index:$LYRICS_ARRAY_INDEX count:$LYRICS_ARRAY_COUNT conky_pid:$CONKY_PID conky fontsize:$CONKY_FONT_SIZE search count:$LYRICS_SEARCH_ARRAY_COUNT"
                         if [[ -n $LYRICS_DISPLAY_CONTENT ]]
                         then
                                 local lyrics_show=$(awk -v title="$MUSIC_TRACK" -v position=$curr_music_pos -v skip=$lyrics_skip_lines 'NR>skip {
