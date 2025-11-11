@@ -13,6 +13,7 @@ APP_VERSION="1.2-20251111"
 APP_RUNTIME_DIR="$HOME/.cache/$APP_NAME"
 APP_PIPE_FILE="$APP_RUNTIME_DIR/$APP_NAME.pipe"
 APP_DB_FILE="$APP_RUNTIME_DIR/$APP_NAME.db"
+APP_LRC_DIR="$APP_RUNTIME_DIR/lrc/"
 APP_CUSTOMIZATION="$APP_RUNTIME_DIR/Customization"
 APP_CURL_TIMEOUT=30
 APP_CURL_COMMAND="curl -s -L --max-time $APP_CURL_TIMEOUT \
@@ -215,6 +216,7 @@ check_tools(){
 prepare_environment(){
         local runtime_dir="${APP_RUNTIME_DIR:?APP_RUNTIME_DIR must be set}"
         mkdir -p "$runtime_dir" || { error "mkdir -p $runtime_dir failed"; }
+        mkdir -p "$APP_LRC_DIR" || { error "mkdir -p $APP_LRC_DIR failed"; }
         if [[ -r "$APP_CUSTOMIZATION" ]]
         then
                 #read gap_x gap_y < ""
@@ -224,6 +226,7 @@ prepare_environment(){
 }; prepare_environment
 
 quit(){
+        echo
         info "正在关闭 Conky..."
         close_conky
         exit 0
@@ -462,6 +465,7 @@ cleanup_search_lyrics(){
 
 search_lyrics(){
         write_pipe "<<  $MUSIC_TRACK  >>\n\${color0}歌词搜索中..."
+        echo
         info "[网络搜索] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST"
         local lyric_url=$(urlbuild "https://lrclib.net/api/search" "q=$MUSIC_TRACK" "track_name=$MUSIC_TRACK" "album_name=$MUSIC_ALBUM" "artist_name=$MUSIC_ARTIST")
         DEBUG=1 debug "$lyric_url"
@@ -491,10 +495,12 @@ fetch_lyrics(){
         get_lyrics_from_db
         if [[ $? == 0 ]]
         then
+                echo
                 info "[缓存命中] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST";
                 LYRICS_ARRAY_SYNCEDLYRICS=("$LYRICS_DB_CONTENT")
                 save_to_db=0
         else
+                echo
                 info "[网络获取] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST"
                 local lyric_url=$(urlbuild "https://lrclib.net/api/get" "track_name=$MUSIC_TRACK" "album_name=$MUSIC_ALBUM" "artist_name=$MUSIC_ARTIST" duration="${MUSIC_LENGTH%%.*}")
                 DEBUG=1 debug "$lyric_url"
@@ -510,17 +516,19 @@ fetch_lyrics(){
 }
 
 dump_lyrics(){
-        echo -n "$LYRICS_DB_CONTENT" > "$MUSIC_TRACK.lrc"
+        echo -n "$LYRICS_DB_CONTENT" > "$APP_LRC_DIR/$MUSIC_TRACK.lrc"
+        echo
+        info "Dump LRC: $(printf %q "$APP_LRC_DIR/$MUSIC_TRACK.lrc")"
 }
 
 upload_lyrics(){
-        local lyrics_upload_lrc=("$(cat ./"$MUSIC_TRACK".lrc)")
+        local lyrics_upload_lrc=("$(cat "$APP_LRC_DIR/$MUSIC_TRACK.lrc")")
         if [[ -n $lyrics_upload_lrc ]]
         then
                 LYRICS_ARRAY_SYNCEDLYRICS=("$lyrics_upload_lrc")
                 parse_lyrics 
         else
-                warn "no ./$MUSIC_TRACK.lrc or the ./$MUSIC_TRACK.lrc is empty"
+                warn "no $APP_LRC_DIR/$MUSIC_TRACK.lrc or the $APP_LRC_DIR/$MUSIC_TRACK.lrc is empty"
         fi
 }
 
