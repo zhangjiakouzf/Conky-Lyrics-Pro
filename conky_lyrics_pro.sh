@@ -9,12 +9,12 @@
 # define variables and alias
 # {{{
 APP_NAME="Conky-Lyrics-Pro"
-APP_VERSION="1.1-20251110"
+APP_VERSION="1.2-20251111"
 APP_RUNTIME_DIR="$HOME/.cache/$APP_NAME"
 APP_PIPE_FILE="$APP_RUNTIME_DIR/$APP_NAME.pipe"
 APP_DB_FILE="$APP_RUNTIME_DIR/$APP_NAME.db"
 APP_CUSTOMIZATION="$APP_RUNTIME_DIR/Customization"
-APP_CURL_TIMEOUT=20
+APP_CURL_TIMEOUT=30
 APP_CURL_COMMAND="curl -s -L --max-time $APP_CURL_TIMEOUT \
   -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' \
   -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' \
@@ -33,6 +33,8 @@ MUSIC_TRACK=""
 MUSIC_ARTIST=""
 MUSIC_ALBUM=""
 MUSIC_LENGTH=""
+MUSIC_OFFSET=0
+
 PLAY_NEW_MUSIC=0
 
 LYRICS_JS_RESPONSE=""
@@ -340,6 +342,7 @@ artist  TEXT NOT NULL,
 album   TEXT NOT NULL,
 lyrics  TEXT NOT NULL,
 fetched_at INTEGER NOT NULL,
+offset  INTEGER NOT NULL default 0,
 UNIQUE(track, artist, album)
 );
 SQL
@@ -372,6 +375,17 @@ SQL
         ) || { warn "select lyrics with $MUSIC_TRACK,$MUSIC_ARTIST,$MUSIC_ALBUM in DB:$APP_DB_FILE failed "; }
         [[ -z $lyrics ]] && { return 1; }
         LYRICS_DB_CONTENT="$lyrics"; 
+        MUSIC_OFFSET=$(sqlite3 "$APP_DB_FILE" << SQL
+.param init
+.param clear
+.param set :track  '$music_track'
+.param set :artist '$music_artist'
+.param set :album  '$music_album'
+SELECT offset FROM lyrics
+WHERE track=:track AND artist=:artist AND album=:album
+ORDER BY fetched_at DESC LIMIT 1;
+SQL
+) || { warn "select offset with $MUSIC_TRACK,$MUSIC_ARTIST,$MUSIC_ALBUM in DB:$APP_DB_FILE failed "; }
         return 0
 }
 
@@ -381,16 +395,18 @@ save_lyrics_to_db() {
         local music_track=$(escape_string "$MUSIC_TRACK")
         local music_artist=$(escape_string "$MUSIC_ARTIST")
         local music_album=$(escape_string "$MUSIC_ALBUM")
+        local music_offset=$(escape_string "$MUSIC_OFFSET")
         local lyrics_escaped=$(escape_string "$LYRICS_DB_CONTENT")
         {
         sqlite3 "$db_file" << SQL
 .param set :track  '$music_track'
 .param set :artist '$music_artist'
 .param set :album  '$music_album'
+.param set :offset "$music_offset"
 .param set :lyrics "$lyrics_escaped"
 INSERT OR REPLACE INTO lyrics
-(track, artist, album, lyrics, fetched_at)
-VALUES (:track, :artist, :album, :lyrics, strftime('%s','now'));
+(track, artist, album, lyrics, fetched_at, offset)
+VALUES (:track, :artist, :album, :lyrics, strftime('%s','now'),:offset);
 SQL
         } || { warn "insert lyrics with $MUSIC_TRACK,$MUSIC_ARTIST,$MUSIC_ALBUM in DB:$APP_DB_FILE failed "; }
 }
@@ -436,10 +452,12 @@ get_music_meta(){
         return 0
 } 
 
-clearup_search_lyrics(){
+cleanup_search_lyrics(){
+        LYRICS_DB_CONTENT=""
         LYRICS_JS_SEARCH_RESPONSE=""
         LYRICS_SEARCH_ARRAY_COUNT=0
         LYRICS_SEARCH_ARRAY_SYNCEDLYRICS=()
+        MUSIC_OFFSET="0"
 }
 
 search_lyrics(){
@@ -459,12 +477,16 @@ search_lyrics(){
         }
 }
 
-fetch_lyrics(){
-        write_pipe "<<  $MUSIC_TRACK  >>\n\${color0}歌词载入中..."
-        clearup_search_lyrics
+cleanup_last_lyrics(){
+        cleanup_search_lyrics
         LYRICS_ARRAY_INDEX=0
         LYRICS_ARRAY_COUNT=0
         LYRICS_DISPLAY_CONTENT=""
+}
+
+fetch_lyrics(){
+        write_pipe "<<  $MUSIC_TRACK  >>\n\${color0}歌词载入中..."
+        cleanup_last_lyrics
         local save_to_db=1
         get_lyrics_from_db
         if [[ $? == 0 ]]
@@ -487,8 +509,22 @@ fetch_lyrics(){
         return $?
 }
 
+dump_lyrics(){
+        echo -n "$LYRICS_DB_CONTENT" > "$MUSIC_TRACK.lrc"
+}
+
+upload_lyrics(){
+        local lyrics_upload_lrc=("$(cat ./"$MUSIC_TRACK".lrc)")
+        if [[ -n $lyrics_upload_lrc ]]
+        then
+                LYRICS_ARRAY_SYNCEDLYRICS=("$lyrics_upload_lrc")
+                parse_lyrics 
+        else
+                warn "no ./$MUSIC_TRACK.lrc or the ./$MUSIC_TRACK.lrc is empty"
+        fi
+}
+
 parse_lyrics(){
-        LYRICS_JS_RESPONSE=""
         local save_to_db=${1:-1}
         LYRICS_ARRAY_COUNT="${#LYRICS_ARRAY_SYNCEDLYRICS[@]}"
         (( $LYRICS_ARRAY_COUNT > 0 )) && { 
@@ -516,7 +552,7 @@ navigate_lyrics(){
         elif (( LYRICS_ARRAY_COUNT > 1 ))
         then
                 (( LYRICS_ARRAY_INDEX = (LYRICS_ARRAY_INDEX + direction + LYRICS_ARRAY_COUNT) % LYRICS_ARRAY_COUNT ));
-                parse_lyrics;
+                parse_lyrics 0;
                 # 新增：切换提示（仅显示 1 秒）
                 #write_pipe "\${color3}已切换到歌词版本 $((LYRICS_ARRAY_INDEX + 1))/${LYRICS_ARRAY_COUNT}"
                 #sleep 1
@@ -558,7 +594,16 @@ handle_keys() {
                         =|+) navigate_lyrics 1;     ret=1;;
                         a) adjust_fontsize_conky 10; ret=2;;
                         s) adjust_fontsize_conky -10;ret=2;;
+                        S) save_lyrics_to_db;;
                         n) PLAY_NEW_MUSIC=1;;
+                        d) dump_lyrics;;
+                        u) upload_lyrics;;
+                        !) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="-10" 'BEGIN {printf "%.2f", a+b}');;
+                        1) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="10" 'BEGIN {printf "%.2f", a+b}');;
+                        @) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="-1" 'BEGIN {printf "%.2f", a+b}');;
+                        2) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="1" 'BEGIN {printf "%.2f", a+b}');;
+                        \#) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="-0.1" 'BEGIN {printf "%.2f", a+b}');;
+                        3) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="0.1" 'BEGIN {printf "%.2f", a+b}');;
                         *) ;;
                 esac
         fi
@@ -593,7 +638,7 @@ main(){
 
                         read -r curr_music_pos curr_music_track <<<$(ctrl_client metadata -f "{{position}} {{title}}") || { warn "ctrl_client metadata -f \"{{position}} {{title}}\" "; sleep 1; continue; }
                         curr_music_artist=$(ctrl_client metadata -f "{{artist}}") || { warn "ctrl_client meta -f {{artist}} failed ";return 1; }
-                        curr_music_pos=$(awk -v pos="$curr_music_pos" 'BEGIN {printf "%.2f", pos/1000000}')
+                        curr_music_pos=$(awk -v pos="$curr_music_pos" -v offset="$MUSIC_OFFSET" 'BEGIN {printf "%.2f", pos/1000000+offset}')
 
                         #处理自动或者手动切换歌曲
                         [[ $curr_music_track != $MUSIC_TRACK || $curr_music_artist != $MUSIC_ARTIST ]] && { PLAY_NEW_MUSIC=1; } 
@@ -602,7 +647,17 @@ main(){
                         (( $(bc <<< "$curr_music_pos < $last_music_pos") ))  && { clear_pipe; lyrics_skip_lines=0; }
 
                         last_music_pos=$curr_music_pos
-                        redraw "position:$curr_music_pos skip_lines:$lyrics_skip_lines curr_skip_lines:$curr_skip_lines index:$LYRICS_ARRAY_INDEX count:$LYRICS_ARRAY_COUNT conky_pid:$CONKY_PID conky fontsize:$CONKY_FONT_SIZE search count:$LYRICS_SEARCH_ARRAY_COUNT"
+                        redraw "\
+position:$curr_music_pos \
+skip_lines:$lyrics_skip_lines \
+curr_skip_lines:$curr_skip_lines \
+conky fontsize:$CONKY_FONT_SIZE \
+conky_pid:$CONKY_PID \
+index:$LYRICS_ARRAY_INDEX \
+count:$LYRICS_ARRAY_COUNT \
+search count:$LYRICS_SEARCH_ARRAY_COUNT \
+offset:$MUSIC_OFFSET \
+"
                         if [[ -n $LYRICS_DISPLAY_CONTENT ]]
                         then
                                 local lyrics_show=$(awk -v title="$MUSIC_TRACK" -v position=$curr_music_pos -v skip=$lyrics_skip_lines 'NR>skip {
