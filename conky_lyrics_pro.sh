@@ -634,9 +634,9 @@ handle_keys() {
                         s) adjust_fontsize_conky -10;ret=2;;
                         S) save_lyrics_to_db;;
                         D) delete_lyrics_from_db;;
-                        n) PLAY_NEW_MUSIC=1;;
                         d) dump_lyrics;;
                         u) upload_lyrics;;
+                        n) PLAY_NEW_MUSIC=1;;
                         !) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="-10" 'BEGIN {printf "%.2f", a+b}');;
                         1) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="10" 'BEGIN {printf "%.2f", a+b}');;
                         @) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="-1" 'BEGIN {printf "%.2f", a+b}');;
