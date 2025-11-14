@@ -555,11 +555,10 @@ dump_lyrics(){
 
 upload_lyrics(){
         local lyrics_upload_lrc=("$(cat "$APP_LRC_DIR/$MUSIC_TRACK.lrc")")
-        warn "$lyrics_upload_lrc"
         if [[ -n $lyrics_upload_lrc ]]
         then
+                cleanup_last_lyrics
                 LYRICS_ARRAY_SYNCEDLYRICS=("$lyrics_upload_lrc")
-                LYRICS_ARRAY_INDEX=0
                 parse_lyrics 
         else
                 warn "no $APP_LRC_DIR/$MUSIC_TRACK.lrc or the $APP_LRC_DIR/$MUSIC_TRACK.lrc is empty"
