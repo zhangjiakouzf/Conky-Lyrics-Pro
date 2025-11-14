@@ -207,7 +207,7 @@ redraw() {
 # Prepare the operating environment
 # {{{
 check_tools(){
-        tools=( "playerctl" "conky" "awk" "curl" "mkfifo" "jq" "sqlite3")
+        tools=( "playerctl" "conky" "awk" "curl" "mkfifo" "jq" "sqlite3" "gedit")
         for tool in "${tools[@]}"
         do
                 command -v "$tool" >/dev/null || { error "$tool is required, you may need to install it first!"; }
@@ -550,6 +550,7 @@ dump_lyrics(){
         echo -n "$LYRICS_DB_CONTENT" > "$APP_LRC_DIR/$MUSIC_TRACK.lrc"
         echo
         info "Dump LRC: $(printf %q "$APP_LRC_DIR/$MUSIC_TRACK.lrc")"
+        gedit "$APP_LRC_DIR/$MUSIC_TRACK.lrc" &
 }
 
 upload_lyrics(){
