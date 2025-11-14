@@ -200,6 +200,7 @@ redraw() {
         #       Ps = 1  ⇒  Erase to Left.
         #       Ps = 2  ⇒  Erase All.
         printf "\033[1K\r%s" "$1"
+
 }
 # }}}
 
