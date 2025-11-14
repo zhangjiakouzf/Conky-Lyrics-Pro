@@ -206,7 +206,7 @@ redraw() {
 # Prepare the operating environment
 # {{{
 check_tools(){
-        tools=( "playerctl" "conky" "awk" "curl" "mkfifo" "jq" )
+        tools=( "playerctl" "conky" "awk" "curl" "mkfifo" "jq" "sqlite3")
         for tool in "${tools[@]}"
         do
                 command -v "$tool" >/dev/null || { error "$tool is required, you may need to install it first!"; }
@@ -295,8 +295,8 @@ conky.config = {
         font='Hack',
         font0='Noto Color Emoji:size=$CONKY_FONT_SIZE',
         font1='Noto Sans Mono CJK SC:size=$CONKY_FONT_SIZE',
-        font2='汇文明朝体::size=$CONKY_FONT_SIZE',
-        font3='汇文明朝体::size=$CONKY_FONT_SIZE',
+        font2='汇文明朝体:size=$CONKY_FONT_SIZE',
+        font3='汇文明朝体:size=$CONKY_FONT_SIZE',
 --        lua_load='~/.conky/breath.lua',
 --        lua_draw_hook_pre='breath_bg',
 }
