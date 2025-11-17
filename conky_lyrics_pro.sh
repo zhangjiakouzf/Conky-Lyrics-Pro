@@ -15,6 +15,7 @@ APP_PIPE_FILE="$APP_RUNTIME_DIR/$APP_NAME.pipe"
 APP_DB_FILE="$APP_RUNTIME_DIR/$APP_NAME.db"
 APP_LRC_DIR="$APP_RUNTIME_DIR/lrc/"
 APP_CUSTOMIZATION="$APP_RUNTIME_DIR/Customization"
+APP_LYRICS_EDITOR="gedit"
 APP_CURL_TIMEOUT=30
 APP_CURL_COMMAND="curl -s -L --max-time $APP_CURL_TIMEOUT \
   -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' \
@@ -207,7 +208,7 @@ redraw() {
 # Prepare the operating environment
 # {{{
 check_tools(){
-        tools=( "playerctl" "conky" "awk" "curl" "mkfifo" "jq" "sqlite3" "gedit")
+        tools=( "playerctl" "conky" "awk" "curl" "mkfifo" "jq" "sqlite3" )
         for tool in "${tools[@]}"
         do
                 command -v "$tool" >/dev/null || { error "$tool is required, you may need to install it first!"; }
@@ -224,12 +225,16 @@ prepare_environment(){
                 #conky_config+="gap_x = $gap_x, gap_y = $gap_y,"
                 :
         fi
+        #关闭回显
+        stty -echo
 }; prepare_environment
 
 quit(){
         echo
         info "正在关闭 Conky..."
         close_conky
+        #打开回显
+        stty echo
         exit 0
 };trap quit SIGINT SIGTERM EXIT
 # }}}
@@ -508,6 +513,51 @@ cleanup_last_lyrics(){
         LYRICS_DISPLAY_CONTENT=""
 }
 
+append_timestamp(){
+        local timestamp="$1"
+        local lyrics_file="$APP_LRC_DIR/$MUSIC_TRACK.lrc"
+#        info "$lyrics_file"
+        [[ -e $lyrics_file ]] || {
+                touch "$lyrics_file"
+                echo
+                info "Create LRC: $lyrics_file"
+        }
+        [[ -w $lyrics_file ]] && { 
+                awk -v t=$timestamp 'BEGIN{printf "[%02d:%02d.%02d] \n", int(t/60), int(t%60), int(t%1*100) }' >> "$lyrics_file"
+        }
+}
+
+dump_lyrics(){
+        local lyrics_file="$APP_LRC_DIR/$MUSIC_TRACK.lrc"
+        echo -n "$LYRICS_DB_CONTENT" > "$lyrics_file"
+        if [[ $? == 0 ]]
+        then
+                echo
+                info "Dump LRC: $lyrics_file"
+                command -v "$APP_LYRICS_EDITOR" >/dev/null && $APP_LYRICS_EDITOR "$lyrics_file" &
+        else
+                warn "can't dump lyrics into $lyrics_file"
+        fi
+}
+
+upload_lyrics(){
+        local lyrics_file="$APP_LRC_DIR/$MUSIC_TRACK.lrc"
+        if [[ -r $lyrics_file ]]
+        then
+                local lyrics_upload_lrc=("$(cat "$lyrics_file")")
+                if [[ -n $lyrics_upload_lrc ]]
+                then
+                        cleanup_last_lyrics
+                        LYRICS_ARRAY_SYNCEDLYRICS=("$lyrics_upload_lrc")
+                        parse_lyrics
+                else
+                        warn "no $lyrics_file  or the $lyrics_file is empty"
+                fi
+        else
+                warn "can't read lyrics from $lyrics_file"
+        fi
+}
+
 fetch_lyrics(){
         write_pipe "<<  $MUSIC_TRACK  >>\n\${color0}歌词载入中..."
         cleanup_last_lyrics
@@ -546,32 +596,13 @@ fetch_lyrics(){
         return $?
 }
 
-dump_lyrics(){
-        echo -n "$LYRICS_DB_CONTENT" > "$APP_LRC_DIR/$MUSIC_TRACK.lrc"
-        echo
-        info "Dump LRC: $(printf %q "$APP_LRC_DIR/$MUSIC_TRACK.lrc")"
-        gedit "$APP_LRC_DIR/$MUSIC_TRACK.lrc" &
-}
-
-upload_lyrics(){
-        local lyrics_upload_lrc=("$(cat "$APP_LRC_DIR/$MUSIC_TRACK.lrc")")
-        if [[ -n $lyrics_upload_lrc ]]
-        then
-                cleanup_last_lyrics
-                LYRICS_ARRAY_SYNCEDLYRICS=("$lyrics_upload_lrc")
-                parse_lyrics 
-        else
-                warn "no $APP_LRC_DIR/$MUSIC_TRACK.lrc or the $APP_LRC_DIR/$MUSIC_TRACK.lrc is empty"
-        fi
-}
-
 parse_lyrics(){
         local save_to_db=${1:-1}
         LYRICS_ARRAY_COUNT="${#LYRICS_ARRAY_SYNCEDLYRICS[@]}"
         (( $LYRICS_ARRAY_COUNT > 0 )) && { 
                 LYRICS_DB_CONTENT=$(echo -e "${LYRICS_ARRAY_SYNCEDLYRICS[$LYRICS_ARRAY_INDEX]}")
                 #英文歌曲不能把空格去掉
-                LYRICS_DISPLAY_CONTENT=$(awk -F'[:.\\[\\]]' 'NF>=2{lyrics_timestemp=($2*60+$3)"."$4;print lyrics_timestemp,$5}'<<<"$LYRICS_DB_CONTENT")
+                LYRICS_DISPLAY_CONTENT=$(awk -F'[:.\\[\\]]' 'NF>=2{lyrics_timestamp=($2*60+$3)"."$4;print lyrics_timestamp,$5}'<<<"$LYRICS_DB_CONTENT")
 
                 [[ $save_to_db == 1 ]] && save_lyrics_to_db
                 #https://www.gnu.org/software/freefont/ranges/symbols.html
@@ -594,10 +625,6 @@ navigate_lyrics(){
         then
                 (( LYRICS_ARRAY_INDEX = (LYRICS_ARRAY_INDEX + direction + LYRICS_ARRAY_COUNT) % LYRICS_ARRAY_COUNT ));
                 parse_lyrics 0;
-                # 新增：切换提示（仅显示 1 秒）
-                #write_pipe "\${color3}已切换到歌词版本 $((LYRICS_ARRAY_INDEX + 1))/${LYRICS_ARRAY_COUNT}"
-                #sleep 1
-                #clear_pipe
         fi
 }
 # }}}
@@ -625,6 +652,7 @@ reset_marquee(){
 #main loop and handle keys 
 # {{{
 handle_keys() {
+        local timestamp="$1"
         ret=0
         local timeout="0.05"   # 检测间隔（秒），可根据需要调整
         # 尝试读取 1 个字符，最多等 $timeout 秒
@@ -639,6 +667,7 @@ handle_keys() {
                         D) delete_lyrics_from_db;;
                         d) dump_lyrics;;
                         u) upload_lyrics;;
+                        c) append_timestamp "$timestamp" ;;
                         n) PLAY_NEW_MUSIC=1;;
                         !) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="-10" 'BEGIN {printf "%.2f", a+b}');;
                         1) MUSIC_OFFSET=$(awk -v a="$MUSIC_OFFSET" -v b="10" 'BEGIN {printf "%.2f", a+b}');;
@@ -672,7 +701,7 @@ main(){
                 while true
                 do
                         #处理键盘按键,
-                        handle_keys
+                        handle_keys "$curr_music_pos"
                         case $? in
                                 1) lyrics_skip_lines=0; ;;
                                 2) print_music_meta ;;
@@ -690,7 +719,7 @@ main(){
 
                         last_music_pos=$curr_music_pos
                         redraw "\
-position:$curr_music_pos \
+pos:$curr_music_pos \
 skip_lines:$lyrics_skip_lines \
 curr_skip_lines:$curr_skip_lines \
 conky fontsize:$CONKY_FONT_SIZE \
@@ -702,27 +731,27 @@ offset:$MUSIC_OFFSET \
 "
                         if [[ -n $LYRICS_DISPLAY_CONTENT ]]
                         then
-                                local lyrics_show=$(awk -v title="$MUSIC_TRACK" -v position=$curr_music_pos -v skip=$lyrics_skip_lines 'NR>skip {
+                                local lyrics_show=$(awk -v title="$MUSIC_TRACK" -v artist="$MUSIC_ARTIST" -v position=$curr_music_pos -v skip=$lyrics_skip_lines 'NR>skip {
                                                 pos=position
                                                 if($1>=pos+1){
                                                         if( length(last) >0 ){
                                                                 #print "1:"$1
                                                                 #print "pos:"pos
                                                                 n=length(last)
-                                                                total_length=$1-last_timestemp
+                                                                total_length=$1-last_timestamp
                                                                 if( 0 == total_length ){
                                                                         total_length=1
                                                                 }
-                                                                insert_pos = int(n*(pos-last_timestemp+2)/($1-last_timestemp)) 
+                                                                insert_pos = int(n*(pos-last_timestamp+2)/($1-last_timestamp)) 
                                                                 if(NR%2){
                                                                         #print "$""{color" NR%4+1 "}""<<  "title"  >>"
-                                                                        print "<<  "title"  >>"
+                                                                        print "<<  "title"  >> -- "artist
                                                                         $1=""
                                                                         print "$""{color3}""$""{font3}"$0
                                                                         print "$""{color1}" substr(last,1,insert_pos) "$""{color2}" substr(last,insert_pos+1)
                                                                 }else{
                                                                         #print "$""{color" NR%4+1 "}""<<  "title"  >>"
-                                                                        print "<<  "title"  >>"
+                                                                        print "<<  "title"  >> -- "artist
                                                                         print "$""{color1}" substr(last,1,insert_pos) "$""{color2}" substr(last,insert_pos+1)
                                                                         $1=""
                                                                         print "$""{color3}""$""{font3}"$0
@@ -732,7 +761,7 @@ offset:$MUSIC_OFFSET \
                                                         }
                                                 }else{
                                                         remove_lines++
-                                                        last_timestemp=$1
+                                                        last_timestamp=$1
                                                         $1=""
                                                         last=$0
                                                 }
