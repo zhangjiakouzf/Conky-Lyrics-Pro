@@ -50,7 +50,7 @@ LYRICS_JS_SEARCH_RESPONSE=""
 declare -a LYRICS_SEARCH_ARRAY_SYNCEDLYRICS
 LYRICS_SEARCH_ARRAY_COUNT=0
 
-CONKY_FONT_SIZE=20
+CONKY_FONT_SIZE=40
 CONKY_RUNNING="no"
 
 # 关键：启用 alias 扩展
@@ -551,7 +551,7 @@ append_timestamp(){
 
 dump_lyrics(){
         local lyrics_file="$APP_LRC_DIR/$MUSIC_TRACK.lrc"
-        echo -n "$LYRICS_DB_CONTENT" > "$lyrics_file"
+        echo -n "$(unescape_string "$LYRICS_DB_CONTENT")" > "$lyrics_file"
         if [[ $? == 0 ]]
         then
                 echo
@@ -745,8 +745,8 @@ main(){
 pos:$curr_music_pos \
 skip_lines:$lyrics_skip_lines \
 curr_skip_lines:$curr_skip_lines \
-conky fontsize:$CONKY_FONT_SIZE \
-conky_pid:$CONKY_PID \
+fontsize:$CONKY_FONT_SIZE \
+pid:$CONKY_PID \
 index:$LYRICS_ARRAY_INDEX \
 count:$LYRICS_ARRAY_COUNT \
 search count:$LYRICS_SEARCH_ARRAY_COUNT \
