@@ -208,7 +208,7 @@ redraw() {
 # Prepare the operating environment
 # {{{
 check_tools(){
-        tools=( "playerctl" "conky" "awk" "curl" "mkfifo" "jq" "sqlite3" )
+        tools=( "playerctl" "conky" "awk" "curl" "mkfifo" "jq" "sqlite3" "sed" )
         for tool in "${tools[@]}"
         do
                 command -v "$tool" >/dev/null || { error "$tool is required, you may need to install it first!"; }
@@ -358,15 +358,23 @@ SQL
         } || { warn "create table in DB:$APP_DB_FILE failed "; } 
 };initialize_db
 
+unescape_string(){
+        local string="$1"
+        string="${string//\\n/$'\n'}"
+#replace all \" to "
+        string="$(sed 's/\\"/"/g;' <<< "$string")"
+        echo -n "$string"
+}
+
 escape_string(){
         local string="$1"
-        local string=${string//$'\n'/\\n}
-        string=${string//\"/\*}
-        string=${string//\'/\*}
+        string=${string//$'\n'/\\n}
+#replace all [^\\]" to \"
+        string="$(sed 's/\([^\\]\)"/\1\\"/g;' <<< "$string")"
         echo -n "$string"
 }
 # 返回 0=缓存命中, 1=未命中
-get_lyrics_from_db() {
+load_lyrics_from_db() {
         local db_file="${APP_DB_FILE:?APP_DB_FILE must be set}"
         local music_track=$(escape_string "$MUSIC_TRACK")
         local music_artist=$(escape_string "$MUSIC_ARTIST")
@@ -374,9 +382,9 @@ get_lyrics_from_db() {
         local lyrics=$(sqlite3 "$APP_DB_FILE" << SQL
 .param init
 .param clear
-.param set :track  '$music_track'
-.param set :artist '$music_artist'
-.param set :album  '$music_album'
+.param set :track  "$music_track"
+.param set :artist "$music_artist"
+.param set :album  "$music_album"
 SELECT lyrics FROM lyrics
 WHERE track=:track AND artist=:artist AND album=:album
 ORDER BY fetched_at DESC LIMIT 1;
@@ -387,9 +395,9 @@ SQL
         MUSIC_OFFSET=$(sqlite3 "$APP_DB_FILE" << SQL
 .param init
 .param clear
-.param set :track  '$music_track'
-.param set :artist '$music_artist'
-.param set :album  '$music_album'
+.param set :track  "$music_track"
+.param set :artist "$music_artist"
+.param set :album  "$music_album"
 SELECT offset FROM lyrics
 WHERE track=:track AND artist=:artist AND album=:album
 ORDER BY fetched_at DESC LIMIT 1;
@@ -397,7 +405,20 @@ SQL
 ) || { warn "select offset with $MUSIC_TRACK,$MUSIC_ARTIST,$MUSIC_ALBUM in DB:$APP_DB_FILE failed "; }
         return 0
 }
-
+#https://www.sqlite.org/cli.html#the_param_command
+#3.2. Dot-command arguments
+#       The arguments passed to dot-commands are parsed from the command tail, per these rules:
+#               The trailing newline and any other trailing whitespace is discarded;
+#               Whitespace immediately following the dot-command name, or any argument input end bound is discarded;
+#               An argument input begins with any non-whitespace character;
+#               An argument input ends with a character which depends upon its leading character thusly:
+#                       for a leading single-quote ('), a single-quote acts as the end delimiter;
+#                       for a leading double-quote ("), an unescaped double-quote acts as the end delimiter;
+#                       for any other leading character, the end delimiter is any whitespace; and
+#                       the command tail end acts as the end delimiter for any argument;
+#               Within a double-quoted argument input, a backslash-escaped double-quote is part of the argument rather than its terminating quote;
+#               Within a double-quoted argument, traditional C-string literal, backslash escape sequence translation is done; and
+#               Argument input delimiters (the bounding quotes or whitespace) are discarded to yield the passed argument.
 save_lyrics_to_db() {
         local db_file="${APP_DB_FILE:?APP_DB_FILE must be set}"
         (( ${#LYRICS_DB_CONTENT} < 10 )) && return 1
@@ -406,11 +427,12 @@ save_lyrics_to_db() {
         local music_album=$(escape_string "$MUSIC_ALBUM")
         local music_offset=$(escape_string "$MUSIC_OFFSET")
         local lyrics_escaped=$(escape_string "$LYRICS_DB_CONTENT")
+#        warn "$lyrics_escaped"
         {
         sqlite3 "$db_file" << SQL
-.param set :track  '$music_track'
-.param set :artist '$music_artist'
-.param set :album  '$music_album'
+.param set :track  "$music_track"
+.param set :artist "$music_artist"
+.param set :album  "$music_album"
 .param set :offset "$music_offset"
 .param set :lyrics "$lyrics_escaped"
 INSERT OR REPLACE INTO lyrics
@@ -428,9 +450,9 @@ delete_lyrics_from_db(){
         #warn "DELETE FROM LYRICS WHERE ( track=$music_track and artist=$music_artist and album=$music_album );"
         {
         sqlite3 "$db_file" << SQL
-.param set :track  '$music_track'
-.param set :artist '$music_artist'
-.param set :album  '$music_album'
+.param set :track  "$music_track"
+.param set :artist "$music_artist"
+.param set :album  "$music_album"
 DELETE FROM LYRICS WHERE ( track=:track and artist=:artist and album=:album );
 SQL
         } || { warn "delete $MUSIC_TRACK,$MUSIC_ARTIST,$MUSIC_ALBUM in DB:$APP_DB_FILE failed "; }
@@ -497,7 +519,7 @@ search_lyrics(){
         LYRICS_JS_SEARCH_RESPONSE=$(eval $lyric_search_cmd) || { warn "Fetch lyrics with \"$lyric_search_cmd\" failed"; return 1; }
         [[ -n $LYRICS_JS_SEARCH_RESPONSE ]] && {
                 local IFS=$'\n';
-                LYRICS_SEARCH_ARRAY_SYNCEDLYRICS=($(jq ' [ .[] | select(.syncedLyrics != null and .syncedLyrics !="" and (.syncedLyrics | test("^\\s*$") | not)) | {l: .syncedLyrics, d: ((.duration - '"$MUSIC_LENGTH"') | fabs)} ] | sort_by(.d) | .[].l ' <<< "$LYRICS_JS_SEARCH_RESPONSE")) || { warn "Parse lyrics failed"; return 1; }
+                LYRICS_SEARCH_ARRAY_SYNCEDLYRICS=($(jq ' [ .[] | select(.syncedLyrics != null and .syncedLyrics !="" and (.syncedLyrics | test("^\\s*$") | not)) | {l: .syncedLyrics, d: ((.duration - '"$MUSIC_LENGTH"') | fabs)} ] | sort_by(.d) | .[].l' <<< "$LYRICS_JS_SEARCH_RESPONSE"|sed 's/^"//;s/"$//;')) || { warn "Parse lyrics failed"; return 1; }
                 LYRICS_SEARCH_ARRAY_COUNT="${#LYRICS_SEARCH_ARRAY_SYNCEDLYRICS[@]}"
                 LYRICS_ARRAY_SYNCEDLYRICS+=("${LYRICS_SEARCH_ARRAY_SYNCEDLYRICS[@]}")
                 LYRICS_ARRAY_INDEX=0
@@ -563,7 +585,7 @@ fetch_lyrics(){
         cleanup_last_lyrics
         local save_to_db=1
         local success=0
-        get_lyrics_from_db
+        load_lyrics_from_db
         if [[ $? == 0 ]]
         then
                 echo
@@ -574,13 +596,14 @@ fetch_lyrics(){
         else
                 echo
                 info "[网络获取] $MUSIC_TRACK $MUSIC_ALBUM $MUSIC_ARTIST"
-                local lyric_url=$(urlbuild "https://lrclib.net/api/get" "track_name=$MUSIC_TRACK" "album_name=$MUSIC_ALBUM" "artist_name=$MUSIC_ARTIST" duration="${MUSIC_LENGTH%%.*}")
+                #local lyric_url=$(urlbuild "https://lrclib.net/api/get" "track_name=$MUSIC_TRACK" "album_name=$MUSIC_ALBUM" "artist_name=$MUSIC_ARTIST" duration="${MUSIC_LENGTH%%.*}")
+                local lyric_url=$(urlbuild "https://lrclib.net/api/get" "track_name=$MUSIC_TRACK" "album_name=$MUSIC_ALBUM" "artist_name=$MUSIC_ARTIST")
                 DEBUG=1 debug "$lyric_url"
                 local lyric_fetch_cmd="$APP_CURL_COMMAND '$lyric_url'" 
                 LYRICS_JS_RESPONSE=$(eval $lyric_fetch_cmd) || { warn "Fetch lyrics with \"$lyric_fetch_cmd\" failed"; LYRICS_JS_RESPONSE=""; }
                 [[ -n $LYRICS_JS_RESPONSE ]] && {
                         local IFS=$'\n';
-                        LYRICS_ARRAY_SYNCEDLYRICS=($(jq '.|select(.syncedLyrics != null and .syncedLyrics !="" and (.syncedLyrics | test("^\\s*$") | not)).syncedLyrics' <<< "$LYRICS_JS_RESPONSE")) || { warn "Parse lyrics failed"; return 1; }
+                        LYRICS_ARRAY_SYNCEDLYRICS=($(jq '.|select(.syncedLyrics != null and .syncedLyrics !="" and (.syncedLyrics | test("^\\s*$") | not)).syncedLyrics' <<< "$LYRICS_JS_RESPONSE"|sed 's/^"//;s/"$//;')) || { warn "Parse lyrics failed"; return 1; }
                         LYRICS_ARRAY_COUNT="${#LYRICS_ARRAY_SYNCEDLYRICS[@]}"
                         (( $LYRICS_ARRAY_COUNT >0 )) && success=1
                 }
@@ -600,11 +623,11 @@ parse_lyrics(){
         local save_to_db=${1:-1}
         LYRICS_ARRAY_COUNT="${#LYRICS_ARRAY_SYNCEDLYRICS[@]}"
         (( $LYRICS_ARRAY_COUNT > 0 )) && { 
-                LYRICS_DB_CONTENT=$(echo -e "${LYRICS_ARRAY_SYNCEDLYRICS[$LYRICS_ARRAY_INDEX]}")
-                #英文歌曲不能把空格去掉
-                LYRICS_DISPLAY_CONTENT=$(awk -F'[:.\\[\\]]' 'NF>=2{lyrics_timestamp=($2*60+$3)"."$4;print lyrics_timestamp,$5}'<<<"$LYRICS_DB_CONTENT")
-
+                LYRICS_DB_CONTENT="${LYRICS_ARRAY_SYNCEDLYRICS[$LYRICS_ARRAY_INDEX]}"
                 [[ $save_to_db == 1 ]] && save_lyrics_to_db
+                #英文歌曲不能把空格去掉
+                LYRICS_DISPLAY_CONTENT="$(unescape_string "$LYRICS_DB_CONTENT")"
+                LYRICS_DISPLAY_CONTENT="$(awk -F'[:.\\[\\]]' 'NF>=2{lyrics_timestamp=($2*60+$3)"."$4;$1=$2=$3=$4="";$1=$1;print lyrics_timestamp,$0}'<<<"$LYRICS_DISPLAY_CONTENT")"
                 #https://www.gnu.org/software/freefont/ranges/symbols.html
                 #ⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ
                 #ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩ
