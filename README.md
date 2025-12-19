@@ -42,8 +42,8 @@ chmod +x conky-lyrics-pro.sh
 ./conky-lyrics-pro.sh
 ```
 ## ❤TODO
-- 歌词时间戳调整
-- 手动歌词编辑
+- ~~歌词时间戳调整~~
+- ~~手动歌词编辑~~
 ## 其他
 ### `LICENSE`（MIT）
 
@@ -62,4 +62,5 @@ Permission is hereby granted, free of charge, to any person obtaining a copy...
 - 位置记忆（开发中）
 - SQLite 缓存系统
 ---
+### [1.2-20251219] - 2025-12-19
 [![Stargazers over time](https://starchart.cc/zhangjiakouzf/Conky-Lyrics-Pro.svg)](https://starchart.cc/zhangjiakouzf/Conky-Lyrics-Pro)
